@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Decentralized Voting</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.2/ethers.umd.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background: #0f1115;
+    color: #e8e8e8;
+    max-width: 640px;
+    margin: 40px auto;
+    padding: 0 20px;
+  }
+  h1 { font-size: 24px; margin-bottom: 4px; }
+  .sub { color: #999; margin-bottom: 24px; font-size: 14px; }
+  .card {
+    background: #1a1d24;
+    border: 1px solid #2a2e38;
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  button {
+    background: #4f7cff;
+    color: white;
+    border: none;
+    padding: 10px 18px;
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+    margin-top: 8px;
+  }
+  button:hover { background: #3d68ee; }
+  button:disabled { background: #444; cursor: not-allowed; }
+  .candidate {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px;
+    border: 1px solid #2a2e38;
+    border-radius: 8px;
+    margin-bottom: 10px;
+  }
+  .status {
+    font-size: 13px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    margin-top: 10px;
+  }
+  .status.ok { background: #133a1f; color: #6fd88a; }
+  .status.err { background: #3a1313; color: #f18a8a; }
+  .status.info { background: #1a2a3a; color: #7ab8f1; }
+  #account { font-size: 13px; color: #7ab8f1; word-break: break-all; }
+  .bar-bg { background: #2a2e38; border-radius: 4px; height: 8px; margin-top: 6px; overflow: hidden; }
+  .bar-fill { background: #4f7cff; height: 100%; }
+  #countdown { font-size: 13px; color: #999; margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<h1>🗳️ Decentralized Voting</h1>
+<div class="sub">Connected to your local Hardhat network</div>
+
+<div class="card">
+  <label style="font-size:13px;color:#999;">Contract Address</label>
+  <div style="display:flex;gap:8px;margin-top:6px;">
+    <input id="contractInput" type="text" placeholder="0x..." style="flex:1;padding:8px;border-radius:6px;border:1px solid #2a2e38;background:#0f1115;color:#e8e8e8;font-family:monospace;font-size:13px;">
+    <button id="saveAddressBtn">Save</button>
+  </div>
+  <div id="account" style="margin-top:12px;">Not connected</div>
+  <button id="connectBtn">Connect Wallet</button>
+</div>
+
+<div class="card">
+  <div id="votingStatus" class="status info">Loading contract state...</div>
+  <div id="countdown"></div>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0;">Candidates</h3>
+  <div id="candidateList">Loading...</div>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0;">Results</h3>
+  <button id="resultsBtn">Get Results</button>
+  <div id="resultsBox"></div>
+</div>
+
+<script>
+// ---- CONFIG ----
+let CONTRACT_ADDRESS = localStorage.getItem("votingContractAddress") || "";
+const CONTRACT_ABI = [
+  {"inputs":[{"internalType":"string","name":"_name","type":"string"}],"name":"addCandidate","outputs":[],"stateMutability":"nonpayable","type":"function"},
+  {"inputs":[{"internalType":"address","name":"_voter","type":"address"}],"name":"addVoter","outputs":[],"stateMutability":"nonpayable","type":"function"},
+  {"inputs":[{"internalType":"uint256","name":"_durationInMinutes","type":"uint256"}],"name":"startVoting","outputs":[],"stateMutability":"nonpayable","type":"function"},
+  {"inputs":[],"stateMutability":"nonpayable","type":"constructor"},
+  {"inputs":[{"internalType":"uint256","name":"_candidateIndex","type":"uint256"}],"name":"vote","outputs":[],"stateMutability":"nonpayable","type":"function"},
+  {"inputs":[],"name":"admin","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"},
+  {"inputs":[{"internalType":"uint256","name":"","type":"uint256"}],"name":"candidates","outputs":[{"internalType":"string","name":"name","type":"string"},{"internalType":"uint256","name":"voteCount","type":"uint256"}],"stateMutability":"view","type":"function"},
+  {"inputs":[],"name":"getCandidateCount","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
+  {"inputs":[{"internalType":"uint256","name":"_index","type":"uint256"}],"name":"getCandidateName","outputs":[{"internalType":"string","name":"","type":"string"}],"stateMutability":"view","type":"function"},
+  {"inputs":[],"name":"getResults","outputs":[{"internalType":"string[]","name":"names","type":"string[]"},{"internalType":"uint256[]","name":"votes","type":"uint256[]"}],"stateMutability":"view","type":"function"},
+  {"inputs":[{"internalType":"address","name":"","type":"address"}],"name":"hasVoted","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"view","type":"function"},
+  {"inputs":[{"internalType":"address","name":"","type":"address"}],"name":"isRegistered","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"view","type":"function"},
+  {"inputs":[],"name":"timeRemaining","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
+  {"inputs":[],"name":"votingEnd","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
+  {"inputs":[],"name":"votingOpen","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"view","type":"function"}
+];
+
+let provider, signer, contract, userAddress;
+
+const connectBtn = document.getElementById("connectBtn");
+const accountDiv = document.getElementById("account");
+const votingStatus = document.getElementById("votingStatus");
+const countdownDiv = document.getElementById("countdown");
+const candidateList = document.getElementById("candidateList");
+const resultsBtn = document.getElementById("resultsBtn");
+const resultsBox = document.getElementById("resultsBox");
+const contractInput = document.getElementById("contractInput");
+const saveAddressBtn = document.getElementById("saveAddressBtn");
+
+contractInput.value = CONTRACT_ADDRESS;
+
+saveAddressBtn.addEventListener("click", () => {
+  const val = contractInput.value.trim();
+  if (!val.startsWith("0x") || val.length !== 42) {
+    accountDiv.textContent = "That doesn't look like a valid contract address.";
+    return;
+  }
+  CONTRACT_ADDRESS = val;
+  localStorage.setItem("votingContractAddress", val);
+  accountDiv.textContent = "Address saved. Click Connect Wallet to load it.";
+  // if already connected, rebuild the contract instance immediately
+  if (signer) {
+    contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+    loadState();
+  }
+});
+
+connectBtn.addEventListener("click", connectWallet);
+resultsBtn.addEventListener("click", loadResults);
+
+async function connectWallet() {
+  if (!window.ethereum) {
+    accountDiv.textContent = "MetaMask not found. Please install it.";
+    return;
+  }
+  if (!CONTRACT_ADDRESS) {
+    accountDiv.textContent = "Paste a contract address above and click Save first.";
+    return;
+  }
+  try {
+    provider = new ethers.BrowserProvider(window.ethereum);
+    await provider.send("eth_requestAccounts", []);
+    signer = await provider.getSigner();
+    userAddress = await signer.getAddress();
+    contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+
+    accountDiv.textContent = "Connected: " + userAddress;
+    connectBtn.textContent = "Connected";
+    connectBtn.disabled = true;
+
+    await loadState();
+  } catch (err) {
+    accountDiv.textContent = "Connection failed: " + (err.message || err);
+  }
+}
+
+async function loadState() {
+  try {
+    const open = await contract.votingOpen();
+    const remaining = await contract.timeRemaining();
+    const remainingNum = Number(remaining);
+
+    if (!open) {
+      votingStatus.textContent = "Voting has not started yet.";
+      votingStatus.className = "status info";
+    } else if (remainingNum > 0) {
+      votingStatus.textContent = "Voting is OPEN.";
+      votingStatus.className = "status ok";
+      startCountdown(remainingNum);
+    } else {
+      votingStatus.textContent = "Voting has ENDED. Results are available.";
+      votingStatus.className = "status err";
+      countdownDiv.textContent = "";
+    }
+
+    await loadCandidates();
+  } catch (err) {
+    votingStatus.textContent = "Error loading contract state: " + (err.message || err);
+    votingStatus.className = "status err";
+  }
+}
+
+function startCountdown(seconds) {
+  let remaining = seconds;
+  countdownDiv.textContent = "Time remaining: " + formatTime(remaining);
+  const interval = setInterval(() => {
+    remaining--;
+    if (remaining <= 0) {
+      clearInterval(interval);
+      countdownDiv.textContent = "Voting window closed.";
+      votingStatus.textContent = "Voting has ENDED. Results are available.";
+      votingStatus.className = "status err";
+      return;
+    }
+    countdownDiv.textContent = "Time remaining: " + formatTime(remaining);
+  }, 1000);
+}
+
+function formatTime(totalSeconds) {
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return m + "m " + s + "s";
+}
+
+async function loadCandidates() {
+  candidateList.innerHTML = "";
+  const count = await contract.getCandidateCount();
+
+  for (let i = 0; i < count; i++) {
+    const c = await contract.candidates(i);
+    const name = c[0];
+    const votes = Number(c[1]);
+
+    const row = document.createElement("div");
+    row.className = "candidate";
+    row.innerHTML = `
+      <div>
+        <strong>${name}</strong>
+        <div style="font-size:12px;color:#999;">Index: ${i}</div>
+      </div>
+      <button data-index="${i}">Vote</button>
+    `;
+    row.querySelector("button").addEventListener("click", () => castVote(i));
+    candidateList.appendChild(row);
+  }
+}
+
+async function castVote(index) {
+  try {
+    votingStatus.textContent = "Sending vote transaction... confirm in MetaMask.";
+    votingStatus.className = "status info";
+    const tx = await contract.vote(index);
+    await tx.wait();
+    votingStatus.textContent = "Vote cast successfully!";
+    votingStatus.className = "status ok";
+  } catch (err) {
+    const reason = extractRevertReason(err);
+    votingStatus.textContent = "Vote failed: " + reason;
+    votingStatus.className = "status err";
+  }
+}
+
+async function loadResults() {
+  resultsBox.innerHTML = "";
+  try {
+    const [names, votes] = await contract.getResults();
+    const total = votes.reduce((a, b) => a + Number(b), 0) || 1;
+
+    names.forEach((name, i) => {
+      const v = Number(votes[i]);
+      const pct = Math.round((v / total) * 100);
+      const row = document.createElement("div");
+      row.style.marginBottom = "12px";
+      row.innerHTML = `
+        <div style="display:flex;justify-content:space-between;">
+          <span>${name}</span><span>${v} vote(s)</span>
+        </div>
+        <div class="bar-bg"><div class="bar-fill" style="width:${pct}%"></div></div>
+      `;
+      resultsBox.appendChild(row);
+    });
+  } catch (err) {
+    const reason = extractRevertReason(err);
+    resultsBox.innerHTML = `<div class="status err">${reason}</div>`;
+  }
+}
+
+function extractRevertReason(err) {
+  if (err.reason) return err.reason;
+  if (err.data && err.data.message) return err.data.message;
+  if (err.message) {
+    const match = err.message.match(/reason="([^"]+)"/);
+    if (match) return match[1];
+    return err.message;
+  }
+  return "Unknown error";
+}
+
+// auto-refresh candidate/results view every 5s while connected
+setInterval(() => {
+  if (contract) loadCandidates();
+}, 5000);
+</script>
+
+</body>
+</html>
